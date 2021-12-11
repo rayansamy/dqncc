@@ -127,6 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-
-
+lorenz
+gresearch_crypto
+*g-research*
+*itd*
+*datasets*
 archive

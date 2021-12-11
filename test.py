@@ -1,10 +1,17 @@
-import os
-
-import numpy as np
-import torch
-from torch import nn
-
+import argparse
 import utils
+from model import ForGAN
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from tqdm import tqdm
+from datetime import datetime
+import torch
+from model import Generator, Discriminator
+import os
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt
+from torch import nn
 
 # Fixing random seeds
 torch.manual_seed(1368)
@@ -13,81 +20,6 @@ YELLOW_TEXT = '\033[93m'
 ENDC = '\033[0m'
 BOLD = '\033[1m'
 
-
-class Generator(nn.Module):
-    def __init__(self, noise_size, condition_size, generator_latent_size, cell_type, mean=0, std=1):
-        super().__init__()
-
-        self.noise_size = noise_size
-        self.condition_size = condition_size
-        self.generator_latent_size = generator_latent_size
-        self.mean = mean
-        self.std = std
-
-        if cell_type == "lstm":
-            self.cond_to_latent = nn.LSTM(input_size=1,
-                                          hidden_size=generator_latent_size)
-        else:
-            self.cond_to_latent = nn.GRU(input_size=1,
-                                         hidden_size=generator_latent_size)
-
-        self.model = nn.Sequential(
-            nn.Linear(in_features=generator_latent_size + self.noise_size,
-                      out_features=generator_latent_size + self.noise_size),
-            nn.ReLU(),
-            nn.Linear(in_features=generator_latent_size + self.noise_size, out_features=1)
-
-        )
-
-    def forward(self, noise, condition):
-        condition = (condition - self.mean) / self.std
-        condition = condition.view(-1, self.condition_size, 1)
-        condition = condition.transpose(0, 1)
-        condition_latent, _ = self.cond_to_latent(condition)
-        condition_latent = condition_latent[-1]
-        g_input = torch.cat((condition_latent, noise), dim=1)
-        output = self.model(g_input)
-        output = output * self.std + self.mean
-
-        return output
-
-    def get_noise_size(self):
-        return self.noise_size
-
-
-class Discriminator(nn.Module):
-    def __init__(self, condition_size, discriminator_latent_size, cell_type, mean=0, std=1):
-        super().__init__()
-        self.discriminator_latent_size = discriminator_latent_size
-        self.condition_size = condition_size
-        self.mean = mean
-        self.std = std
-
-        if cell_type == "lstm":
-            self.input_to_latent = nn.LSTM(input_size=1,
-                                           hidden_size=discriminator_latent_size)
-        else:
-            self.input_to_latent = nn.GRU(input_size=1,
-                                          hidden_size=discriminator_latent_size)
-
-        self.model = nn.Sequential(
-            nn.Linear(in_features=discriminator_latent_size, out_features=1),
-            nn.Sigmoid()
-        )
-
-    def forward(self, prediction, condition):
-        d_input = torch.cat((condition, prediction.view(-1, 1)), dim=1)
-        d_input = (d_input - self.mean) / self.std
-        """
-        print("d input shape : "+str(d_input.shape))
-        print("condition size : "+str(self.condition_size))
-        """
-        d_input = d_input.view(-1, self.condition_size + 1, 1)
-        d_input = d_input.transpose(0, 1)
-        d_latent, _ = self.input_to_latent(d_input)
-        d_latent = d_latent[-1]
-        output = self.model(d_latent)
-        return output
 
 class ForGAN:
     def __init__(self, opt):
@@ -167,7 +99,7 @@ class ForGAN:
             d_g_decision = self.discriminator(x_fake, condition)
             # Mackey-Glass works best with Minmax loss in our expriements while other dataset
             # produce their best result with non-saturated loss
-            if self.opt.dataset == "mg":
+            if opt.dataset == "mg":
                 g_loss = adversarial_loss(d_g_decision, torch.full_like(d_g_decision, 1, device=self.device))
             else:
                 g_loss = -1 * adversarial_loss(d_g_decision, torch.full_like(d_g_decision, 0, device=self.device))
@@ -225,3 +157,46 @@ class ForGAN:
                       crps,
                       kld))
 
+
+if __name__ == '__main__':
+    ap = argparse.ArgumentParser()
+    # mg for Mackey Glass and itd = Internet traffic dataset (A5M)
+    ap.add_argument("-ds", metavar='', dest="dataset", type=str, default="lorenz",
+                    help="The name of dataset: lorenz or mg or itd")
+    ap.add_argument("-t", metavar='', dest="cell_type", type=str, default="gru",
+                    help="The type of cells : lstm or gru")
+    ap.add_argument("-steps", metavar='', dest="n_steps", type=int, default=10000,
+                    help="Number of steps for training")
+    ap.add_argument("-bs", metavar='', dest="batch_size", type=int, default=1000,
+                    help="Batch size")
+    ap.add_argument("-lr", metavar='', dest="lr", type=float, default=0.001,
+                    help="Learning rate for RMSprop optimizer")
+    ap.add_argument("-n", metavar='', dest="noise_size", type=int, default=32,
+                    help="The size of Noise of Vector")
+    ap.add_argument("-c", metavar='', dest="condition_size", type=int, default=24,
+                    help="The size of look-back window ( Condition )")
+    ap.add_argument("-rg", metavar='', dest="generator_latent_size", type=int, default=8,
+                    help="The number of cells in generator")
+    ap.add_argument("-rd", metavar='', dest="discriminator_latent_size", type=int, default=64,
+                    help="The number of cells in discriminator")
+    ap.add_argument("-d_iter", metavar='', dest="d_iter", type=int, default=2,
+                    help="Number of training iteration for discriminator")
+    ap.add_argument("-hbin", metavar='', dest="hist_bins", type=int, default=80,
+                    help="Number of histogram bins for calculating KLD")
+    ap.add_argument("-hmin", metavar='', dest="hist_min", type=float, default=-11,
+                    help="Min range of histogram for calculating KLD")
+    ap.add_argument("-hmax", metavar='', dest="hist_max", type=float, default=11,
+                    help="Max range of histogram for calculating KLD")
+
+    opt = ap.parse_args()
+
+    x_train, y_train, x_val, y_val, x_test, y_test = utils.prepare_dataset(opt.dataset, opt.condition_size)
+    opt.data_mean = x_train.mean()
+    opt.data_std = x_train.std()
+    
+    forgan = ForGAN(opt)
+    
+    print(x_train.shape)
+    print(y_train.shape)
+    forgan.train(x_train, y_train, x_val, y_val)
+    forgan.test(x_test, y_test)
